@@ -1,0 +1,66 @@
+{
+  "fastapi": {
+    "root": {
+      "min": 1.7894999982672743,
+      "max": 25.442299998758244,
+      "mean": 6.103316000080667,
+      "median": 2.485250000063388,
+      "std_dev": 6.396614744940961,
+      "success_rate": 100.0,
+      "total_requests": 100
+    },
+    "create": {
+      "error": "All requests failed",
+      "success_rate": 0
+    },
+    "list": {
+      "min": 2.262799998788978,
+      "max": 27.34769999915443,
+      "mean": 5.505566999981966,
+      "median": 2.717800000027637,
+      "std_dev": 5.556020416706237,
+      "success_rate": 100.0,
+      "total_requests": 100
+    },
+    "concurrent": {
+      "mean": 14.051756999924692,
+      "median": 13.342899999770452,
+      "throughput": 71.16547774099419,
+      "success_rate": 100.0,
+      "total_successful": 100,
+      "total_requests": 100
+    }
+  },
+  "flask": {
+    "root": {
+      "min": 2.0973000009689713,
+      "max": 16.88830000057351,
+      "mean": 3.7646650000169757,
+      "median": 2.590000000054715,
+      "std_dev": 3.4052859755466858,
+      "success_rate": 100.0,
+      "total_requests": 100
+    },
+    "create": {
+      "error": "All requests failed",
+      "success_rate": 0
+    },
+    "list": {
+      "min": 2.430699998512864,
+      "max": 25.8908000014344,
+      "mean": 4.4235890000345535,
+      "median": 2.836599999682221,
+      "std_dev": 4.606389890364704,
+      "success_rate": 100.0,
+      "total_requests": 100
+    },
+    "concurrent": {
+      "mean": 17.090570000054868,
+      "median": 17.33224999952654,
+      "throughput": 58.5117991966792,
+      "success_rate": 100.0,
+      "total_successful": 100,
+      "total_requests": 100
+    }
+  }
+}
