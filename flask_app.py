@@ -1,199 +1,135 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
+import time
+import uuid
 from datetime import datetime
-import json
-from typing import Optional
+import threading
+import queue
 
 app = Flask(__name__)
 
-# In-memory storage
-items_db = {}
-item_counter = 1
+# Helper functions (same logic but sync)
+def simulate_embedding_sync(text: str):
+    """Simulate embedding generation - blocks the entire server"""
+    compute_time = min(0.01 * len(text), 0.1)
+    time.sleep(compute_time)  # BLOCKING - this is the problem!
+    return [float(hash(f"{text}_{i}") % 1000) / 1000 for i in range(384)]
 
-# Manual validation functions - Lots of boilerplate!
-def validate_item_data(data):
-    """Manual validation - Error prone and verbose!"""
-    errors = []
-    
-    # Validate name
-    if 'name' not in data:
-        errors.append("Name is required")
-    elif not isinstance(data['name'], str):
-        errors.append("Name must be a string")
-    elif len(data['name']) < 1 or len(data['name']) > 50:
-        errors.append("Name must be between 1 and 50 characters")
-    elif not data['name'].strip():
-        errors.append("Name cannot be empty")
-    
-    # Validate price
-    if 'price' not in data:
-        errors.append("Price is required")
-    else:
-        try:
-            price = float(data['price'])
-            if price <= 0:
-                errors.append("Price must be greater than 0")
-        except (ValueError, TypeError):
-            errors.append("Price must be a valid number")
-    
-    # Validate quantity
-    if 'quantity' not in data:
-        errors.append("Quantity is required")
-    else:
-        try:
-            quantity = int(data['quantity'])
-            if quantity < 1 or quantity > 1000:
-                errors.append("Quantity must be between 1 and 1000")
-        except (ValueError, TypeError):
-            errors.append("Quantity must be a valid integer")
-    
-    # Validate tags (optional)
-    if 'tags' in data:
-        if not isinstance(data['tags'], list):
-            errors.append("Tags must be a list")
-        elif len(data['tags']) > 10:
-            errors.append("Maximum 10 tags allowed")
-    
-    return errors
+def simulate_generation_sync(prompt: str, max_tokens: int):
+    """Simulate LLM generation - blocks the entire server"""
+    tokens = []
+    for i in range(max_tokens):
+        time.sleep(0.01)  # BLOCKING per token
+        tokens.append(f"token_{i}")
+    return f"Generated response for: '{prompt[:50]}...' using {len(tokens)} tokens"
 
-@app.route('/', methods=['GET'])
-def root():
-    """Simple root endpoint"""
-    return jsonify({
-        "message": "Welcome to Flask API",
-        "note": "No automatic docs - you need to write them manually!"
-    })
+# Manual validation (error-prone, lots of boilerplate)
+def validate_embedding_request(data):
+    if not data or 'text' not in data:
+        return False, "Missing 'text' field"
+    if not isinstance(data['text'], str):
+        return False, "'text' must be string"
+    if len(data['text']) == 0:
+        return False, "'text' cannot be empty"
+    if len(data['text']) > 1000:
+        return False, "'text' too long (max 1000 chars)"
+    return True, None
 
-@app.route('/items/', methods=['POST'])
-def create_item():
-    """Create a new item - Lots of manual validation needed!"""
-    global item_counter
+def validate_generate_request(data):
+    if not data or 'prompt' not in data:
+        return False, "Missing 'prompt' field"
+    if not isinstance(data['prompt'], str):
+        return False, "'prompt' must be string"
+    if len(data['prompt']) == 0:
+        return False, "'prompt' cannot be empty"
     
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
+    max_tokens = data.get('max_tokens', 100)
+    if not isinstance(max_tokens, int) or max_tokens < 1 or max_tokens > 500:
+        return False, "'max_tokens' must be integer between 1 and 500"
+    
+    temp = data.get('temperature', 0.7)
+    if not isinstance(temp, (int, float)) or temp < 0 or temp > 2:
+        return False, "'temperature' must be between 0 and 2"
+    
+    return True, None
+
+@app.route('/embed', methods=['POST'])
+def generate_embedding():
+    """Generate embedding - but each request blocks all others!"""
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
     
     # Manual validation
-    errors = validate_item_data(data)
-    if errors:
-        return jsonify({"errors": errors}), 400
-    
-    # Manual data extraction and conversion
-    name = data['name'].strip()
-    price = float(data['price'])
-    quantity = int(data['quantity'])
-    tags = data.get('tags', [])
-    
-    new_item = {
-        "id": item_counter,
-        "name": name,
-        "price": price,
-        "quantity": quantity,
-        "tags": tags,
-        "created_at": datetime.now().isoformat(),
-        "total_value": price * quantity
-    }
-    
-    items_db[item_counter] = new_item
-    item_counter += 1
-    
-    return jsonify(new_item), 201
-
-@app.route('/items/', methods=['GET'])
-def list_items():
-    """List items with manual pagination and filtering"""
-    # Manual query parameter parsing and validation
-    try:
-        skip = int(request.args.get('skip', 0))
-        if skip < 0:
-            skip = 0
-    except ValueError:
-        skip = 0
+    data = request.get_json()
+    valid, error = validate_embedding_request(data)
+    if not valid:
+        return jsonify({"error": error}), 400
     
     try:
-        limit = int(request.args.get('limit', 10))
-        if limit < 1 or limit > 100:
-            limit = 10
-    except ValueError:
-        limit = 10
-    
-    min_price = request.args.get('min_price')
-    if min_price:
-        try:
-            min_price = float(min_price)
-        except ValueError:
-            return jsonify({"error": "min_price must be a number"}), 400
-    
-    items = list(items_db.values())
-    
-    # Manual filtering
-    if min_price is not None:
-        items = [item for item in items if item["price"] >= min_price]
-    
-    # Manual pagination
-    paginated_items = items[skip:skip + limit]
-    
-    return jsonify(paginated_items)
+        embedding = simulate_embedding_sync(data['text'])
+        latency_ms = (time.time() - start_time) * 1000
+        
+        return jsonify({
+            "embedding": embedding,
+            "dimension": len(embedding),
+            "latency_ms": round(latency_ms, 2),
+            "request_id": request_id
+        })
+    except Exception as e:
+        return jsonify({"error": f"Embedding failed: {str(e)}"}), 500
 
-@app.route('/items/<int:item_id>', methods=['GET'])
-def get_item(item_id):
-    """Get a specific item"""
-    if item_id not in items_db:
-        return jsonify({"error": f"Item {item_id} not found"}), 404
-    
-    return jsonify(items_db[item_id])
-
-@app.route('/items/<int:item_id>', methods=['PUT'])
-def update_item(item_id):
-    """Update an item"""
-    if item_id not in items_db:
-        return jsonify({"error": f"Item {item_id} not found"}), 404
+@app.route('/generate', methods=['POST'])
+def generate_text():
+    """Generate text - blocks entire server during generation"""
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
     
     data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
+    valid, error = validate_generate_request(data)
+    if not valid:
+        return jsonify({"error": error}), 400
     
-    # Manual validation
-    errors = validate_item_data(data)
-    if errors:
-        return jsonify({"errors": errors}), 400
-    
-    # Manual update
-    name = data['name'].strip()
-    price = float(data['price'])
-    quantity = int(data['quantity'])
-    tags = data.get('tags', [])
-    
-    updated_item = {
-        "id": item_id,
-        "name": name,
-        "price": price,
-        "quantity": quantity,
-        "tags": tags,
-        "created_at": items_db[item_id]["created_at"],
-        "total_value": price * quantity
-    }
-    
-    items_db[item_id] = updated_item
-    return jsonify(updated_item)
+    try:
+        generated = simulate_generation_sync(data['prompt'], data.get('max_tokens', 100))
+        latency_ms = (time.time() - start_time) * 1000
+        
+        return jsonify({
+            "generated_text": generated,
+            "tokens_generated": data.get('max_tokens', 100),
+            "latency_ms": round(latency_ms, 2),
+            "request_id": request_id
+        })
+    except Exception as e:
+        return jsonify({"error": f"Generation failed: {str(e)}"}), 500
 
-@app.route('/items/<int:item_id>', methods=['DELETE'])
-def delete_item(item_id):
-    """Delete an item"""
-    if item_id not in items_db:
-        return jsonify({"error": f"Item {item_id} not found"}), 404
+@app.route('/embed/batch', methods=['POST'])
+def batch_embedding():
+    """Process batch sequentially - NO concurrency"""
+    data = request.get_json()
+    if not data or 'texts' not in data:
+        return jsonify({"error": "Missing 'texts' field"}), 400
     
-    del items_db[item_id]
-    return jsonify({"message": f"Item {item_id} successfully deleted"})
+    texts = data['texts']
+    if not isinstance(texts, list) or len(texts) == 0 or len(texts) > 100:
+        return jsonify({"error": "texts must be list of 1-100 items"}), 400
+    
+    responses = []
+    for text in texts:
+        start_time = time.time()
+        embedding = simulate_embedding_sync(text)
+        responses.append({
+            "embedding": embedding,
+            "dimension": len(embedding),
+            "latency_ms": round((time.time() - start_time) * 1000, 2),
+            "request_id": str(uuid.uuid4())
+        })
+    
+    return jsonify(responses)
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        "status": "healthy",
-        "items_count": len(items_db),
-        "timestamp": datetime.now().isoformat()
-    })
+    return jsonify({"status": "healthy", "timestamp": datetime.now().isoformat()})
+
+# Note: No automatic documentation, no streaming support, no async
 
 if __name__ == '__main__':
-    # Run with: python flask_app.py
-    app.run(host='127.0.0.1', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=False)

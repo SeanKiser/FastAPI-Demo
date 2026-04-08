@@ -1,156 +1,143 @@
-from fastapi import FastAPI, HTTPException, Query, Path
-from pydantic import BaseModel, Field, validator
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 from typing import List, Optional
+import asyncio
+import time
+import uuid
 from datetime import datetime
-import uvicorn
 
-# FastAPI app initialization - Simple and clean!
 app = FastAPI(
-    title="FastAPI Demo API",
-    description="This demonstrates FastAPI's speed, validation, and automatic docs",
+    title="AI Inference API - FastAPI",
+    description="High-performance API for AI workloads with async support",
     version="1.0.0"
 )
 
-# Pydantic models for automatic validation
-class Item(BaseModel):
-    name: str = Field(..., min_length=1, max_length=50, description="Item name")
-    price: float = Field(..., gt=0, description="Price must be greater than 0")
-    quantity: int = Field(..., ge=1, le=1000, description="Quantity between 1-1000")
-    tags: Optional[List[str]] = Field(default=[], max_items=10)
-    
-    # Custom validation - automatic and type-safe!
-    @validator('name')
-    def name_must_not_be_empty(cls, v):
-        if not v.strip():
-            raise ValueError('Name cannot be empty or just whitespace')
-        return v.strip()
-    
-    class Config:
-        schema_extra = {
-            "example": {
-                "name": "Gaming Laptop",
-                "price": 999.99,
-                "quantity": 5,
-                "tags": ["electronics", "gaming"]
-            }
-        }
+# Request/Response Models with built-in validation
+class EmbeddingRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=1000, description="Input text to embed")
+    model: str = Field("fast-sbert", description="Embedding model to use")
 
-class ItemResponse(Item):
-    id: int
-    created_at: datetime
-    total_value: float
+class EmbeddingResponse(BaseModel):
+    embedding: List[float]
+    dimension: int
+    latency_ms: float
+    request_id: str
 
-# In-memory storage
-items_db = {}
-item_counter = 1
+class GenerateRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, description="Input prompt")
+    max_tokens: int = Field(100, ge=1, le=500, description="Maximum tokens to generate")
+    temperature: float = Field(0.7, ge=0.0, le=2.0, description="Sampling temperature")
 
-@app.get("/", tags=["Root"])
-async def root():
-    """Simple root endpoint - Notice how clean this is!"""
-    return {
-        "message": "Welcome to FastAPI Demo!",
-        "docs": "Visit /docs for automatic interactive documentation",
-        "redoc": "Visit /redoc for alternative documentation"
-    }
+class GenerateResponse(BaseModel):
+    generated_text: str
+    tokens_generated: int
+    latency_ms: float
+    request_id: str
 
-@app.post("/items/", response_model=ItemResponse, status_code=201, tags=["Items"])
-async def create_item(item: Item):
-    """
-    Create a new item - FastAPI automatically:
-    - Validates all input data
-    - Generates JSON Schema
-    - Provides type hints and autocomplete
-    """
-    global item_counter
-    
-    # No manual validation needed - FastAPI already validated everything!
-    new_item = {
-        "id": item_counter,
-        **item.dict(),
-        "created_at": datetime.now(),
-        "total_value": item.price * item.quantity
-    }
-    
-    items_db[item_counter] = new_item
-    item_counter += 1
-    
-    return new_item
+class BatchEmbeddingRequest(BaseModel):
+    texts: List[str] = Field(..., min_items=1, max_items=100, description="Batch of texts")
+    model: str = "fast-sbert"
 
-@app.get("/items/", response_model=List[ItemResponse], tags=["Items"])
-async def list_items(
-    skip: int = Query(0, ge=0, description="Number of items to skip"),
-    limit: int = Query(10, ge=1, le=100, description="Max items to return"),
-    min_price: Optional[float] = Query(None, gt=0, description="Filter by minimum price")
-):
-    """
-    List all items with pagination and filtering.
-    FastAPI handles query parameter validation automatically!
-    """
-    items = list(items_db.values())
-    
-    # Apply filters
-    if min_price is not None:
-        items = [item for item in items if item["price"] >= min_price]
-    
-    # Apply pagination
-    return items[skip:skip + limit]
+# Simulated AI workloads
+async def simulate_embedding(text: str) -> List[float]:
+    """Simulate embedding generation with realistic delay"""
+    # Simulate compute time proportional to text length
+    compute_time = min(0.01 * len(text), 0.1)  # 10ms per 1000 chars max 100ms
+    await asyncio.sleep(compute_time)
+    # Return mock embedding vector
+    return [float(hash(f"{text}_{i}") % 1000) / 1000 for i in range(384)]
 
-@app.get("/items/{item_id}", response_model=ItemResponse, tags=["Items"])
-async def get_item(
-    item_id: int = Path(..., gt=0, description="The ID of the item to retrieve")
-):
-    """
-    Get a specific item by ID.
-    FastAPI validates the path parameter automatically!
-    """
-    if item_id not in items_db:
-        raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
-    
-    return items_db[item_id]
+async def simulate_generation(prompt: str, max_tokens: int) -> str:
+    """Simulate LLM text generation"""
+    # Simulate token-by-token generation with realistic delay
+    tokens = []
+    for i in range(max_tokens):
+        await asyncio.sleep(0.01)  # 10ms per token
+        tokens.append(f"token_{i}")
+    return f"Generated response for: '{prompt[:50]}...' using {len(tokens)} tokens"
 
-@app.put("/items/{item_id}", response_model=ItemResponse, tags=["Items"])
-async def update_item(
-    item_id: int = Path(..., gt=0),
-    item: Item = None  # FastAPI validates this automatically
-):
-    """Update an existing item with automatic validation"""
-    if item_id not in items_db:
-        raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+# Async endpoints for maximum concurrency
+@app.post("/embed", response_model=EmbeddingResponse, status_code=200)
+async def generate_embedding(request: EmbeddingRequest):
+    """Generate embeddings for input text. Async handler allows concurrent requests."""
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
     
-    updated_item = {
-        "id": item_id,
-        **item.dict(),
-        "created_at": items_db[item_id]["created_at"],
-        "total_value": item.price * item.quantity
-    }
-    
-    items_db[item_id] = updated_item
-    return updated_item
+    try:
+        embedding = await simulate_embedding(request.text)
+        latency_ms = (time.time() - start_time) * 1000
+        
+        return EmbeddingResponse(
+            embedding=embedding,
+            dimension=len(embedding),
+            latency_ms=round(latency_ms, 2),
+            request_id=request_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Embedding failed: {str(e)}")
 
-@app.delete("/items/{item_id}", tags=["Items"])
-async def delete_item(item_id: int = Path(..., gt=0)):
-    """Delete an item"""
-    if item_id not in items_db:
-        raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
+@app.post("/generate", response_model=GenerateResponse)
+async def generate_text(request: GenerateRequest):
+    """Generate text using simulated LLM. Async handles multiple concurrent requests efficiently."""
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
     
-    del items_db[item_id]
-    return {"message": f"Item {item_id} successfully deleted"}
+    try:
+        generated = await simulate_generation(request.prompt, request.max_tokens)
+        latency_ms = (time.time() - start_time) * 1000
+        
+        return GenerateResponse(
+            generated_text=generated,
+            tokens_generated=request.max_tokens,
+            latency_ms=round(latency_ms, 2),
+            request_id=request_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
-@app.get("/health", tags=["System"])
+@app.post("/embed/batch", response_model=List[EmbeddingResponse])
+async def batch_embedding(request: BatchEmbeddingRequest):
+    """Process multiple embeddings concurrently - where async really shines!"""
+    start_time = time.time()
+    tasks = [simulate_embedding(text) for text in request.texts]
+    embeddings = await asyncio.gather(*tasks)
+    
+    responses = []
+    for text, embedding in zip(request.texts, embeddings):
+        responses.append(EmbeddingResponse(
+            embedding=embedding,
+            dimension=len(embedding),
+            latency_ms=round((time.time() - start_time) * 1000 / len(request.texts), 2),
+            request_id=str(uuid.uuid4())
+        ))
+    return responses
+
+@app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Quick health check endpoint"""
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+
+@app.get("/docs")
+async def get_docs():
+    """FastAPI automatically generates interactive API documentation at /docs"""
     return {
-        "status": "healthy",
-        "items_count": len(items_db),
-        "timestamp": datetime.now().isoformat()
+        "message": "Interactive API docs available at /docs",
+        "openapi": "/openapi.json"
     }
+
+# Simulated streaming endpoint for true AI workloads
+@app.post("/generate/stream")
+async def generate_stream(request: GenerateRequest):
+    """Stream generated text token by token - impossible in Flask without hacks"""
+    async def token_generator():
+        for i in range(request.max_tokens):
+            await asyncio.sleep(0.01)
+            yield f"data: token_{i}\n\n"
+        yield "data: [DONE]\n\n"
+    
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(token_generator(), media_type="text/event-stream")
 
 if __name__ == "__main__":
-    # Run with: python fastapi_app.py
-    uvicorn.run(
-        "fastapi_app:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=True,  # Auto-reload during development
-        log_level="info"
-    )
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
